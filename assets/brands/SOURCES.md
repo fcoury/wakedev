@@ -15,6 +15,9 @@ Source URL (press kit ZIP):
 - Source: OpenAI brand page assets (Blossom icon SVG).
 - Extracted file:
   - OpenAI Blossom (SVG + derived PNG + ICNS)
+- Derived files:
+  - OpenAI Blossom (single) cropped from the official SVG's right-side mark.
+  - Black and white single-blossom SVG/PNG variants for experimentation.
 - Notes: Use per OpenAI brand guidelines.
   - Codex uses OpenAI Blossom as a fallback logo.
 

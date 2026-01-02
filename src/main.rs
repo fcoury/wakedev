@@ -57,12 +57,22 @@ fn handle_send(config_path: Option<&PathBuf>, args: SendArgs) -> Result<(), Noti
         return Err(NotifallError::BackgroundRequiresOnClick);
     }
 
+    let title = resolve_title(args.title.clone(), source_config, source.as_deref());
+    let mut icon = if args.no_icon {
+        None
+    } else {
+        resolve_icon(args.icon.clone(), source_config, source.as_deref())
+    };
+    if icon.is_some() && !allow_image_icons() {
+        icon = None;
+    }
     let notification = Notification {
-        title: args.title,
+        title,
         message: args.message,
         source: source.clone(),
-        icon: resolve_icon(args.icon.clone(), source_config),
+        icon,
         link: args.link.clone(),
+        sound: args.sound.clone(),
         urgency: args.urgency.map(map_urgency),
         tag: args.tag.clone(),
         sender: None,
@@ -73,7 +83,7 @@ fn handle_send(config_path: Option<&PathBuf>, args: SendArgs) -> Result<(), Noti
 
     match provider_name.as_str() {
         "macos" => {
-            let macos_config = resolve_macos_config(config.as_ref(), source_config);
+            let macos_config = resolve_macos_config(config.as_ref(), source_config, source.as_deref());
 
             if args.background {
                 let payload = WaitPayload {
@@ -260,25 +270,56 @@ fn resolve_source_config<'a>(
     source: Option<&str>,
 ) -> Option<&'a SourceConfig> {
     let source = source?;
-    config?
-        .sources
-        .as_ref()
+    if let Some(cfg) = config
+        .and_then(|c| c.sources.as_ref())
         .and_then(|sources| sources.get(source))
+    {
+        return Some(cfg);
+    }
+    None
+}
+
+fn resolve_title(
+    cli_title: Option<String>,
+    source_config: Option<&SourceConfig>,
+    source: Option<&str>,
+) -> String {
+    if let Some(title) = cli_title {
+        return title;
+    }
+    if let Some(display) = source_config.and_then(|cfg| cfg.display_name.as_ref()) {
+        return display.clone();
+    }
+    if let Some(source) = source {
+        return title_from_source(source);
+    }
+    "Wakedev".to_string()
+}
+
+fn title_from_source(source: &str) -> String {
+    let mut chars = source.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "Wakedev".to_string(),
+    }
 }
 
 fn resolve_icon(
     cli_icon: Option<PathBuf>,
     source_config: Option<&SourceConfig>,
+    source: Option<&str>,
 ) -> Option<PathBuf> {
     if cli_icon.is_some() {
         return cli_icon;
     }
     source_config.and_then(|cfg| cfg.icon.clone())
+        .or_else(|| default_source_icon(source))
 }
 
 fn resolve_macos_config(
     config: Option<&Config>,
     source_config: Option<&SourceConfig>,
+    source: Option<&str>,
 ) -> Option<MacosConfig> {
     let mut macos = config.and_then(|c| c.macos.clone());
     if let Some(source_cfg) = source_config {
@@ -287,7 +328,137 @@ fn resolve_macos_config(
             entry.app_bundle_id = source_cfg.app_bundle_id.clone();
         }
     }
+    if macos.as_ref().and_then(|m| m.app_bundle_id.as_ref()).is_none() {
+        if let Some(bundle_id) = default_source_bundle_id(source) {
+            let entry = macos.get_or_insert_with(MacosConfig::default);
+            entry.app_bundle_id = Some(bundle_id);
+        }
+    }
     macos
+}
+
+fn default_source_icon(source: Option<&str>) -> Option<PathBuf> {
+    let _ = source?;
+    None
+}
+
+fn default_source_bundle_id(source: Option<&str>) -> Option<String> {
+    let source = source?;
+    if source == "claude" {
+        return ensure_source_bundle(
+            "claude",
+            "Wakedev Claude",
+            "com.wakedev.claude",
+            include_bytes!(
+                "../assets/brands/anthropic/claude/icons/claude-symbol-clay.icns"
+            ),
+        );
+    }
+    if source == "codex" {
+        return ensure_source_bundle(
+            "codex",
+            "Wakedev Codex",
+            "com.wakedev.codex",
+            include_bytes!("../assets/brands/codex/icons/openai-blossom-light.icns"),
+        );
+    }
+    None
+}
+
+fn ensure_source_bundle(
+    source: &str,
+    display_name: &str,
+    bundle_id: &str,
+    icon_bytes: &[u8],
+) -> Option<String> {
+    let base_dir = std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let app_dir = base_dir.join("wakedev/apps").join(format!("{}.app", source));
+    let contents = app_dir.join("Contents");
+    let macos = contents.join("MacOS");
+    let resources = contents.join("Resources");
+
+    if fs::create_dir_all(&macos).is_err() || fs::create_dir_all(&resources).is_err() {
+        return None;
+    }
+
+    let icon_name = format!("{}.icns", source);
+    let icon_path = resources.join(&icon_name);
+    let icon_changed = match write_if_changed(&icon_path, icon_bytes) {
+        Ok(changed) => changed,
+        Err(_) => return None,
+    };
+
+    let plist_path = contents.join("Info.plist");
+    if !plist_path.exists() || icon_changed {
+        let icon_version = icon_bytes
+            .iter()
+            .fold(0u32, |acc, byte| acc.wrapping_add(*byte as u32));
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>{}</string>
+  <key>CFBundleIdentifier</key>
+  <string>{}</string>
+  <key>CFBundleVersion</key>
+  <string>{}</string>
+  <key>CFBundleShortVersionString</key>
+  <string>{}</string>
+  <key>CFBundleExecutable</key>
+  <string>wakedev-helper</string>
+  <key>CFBundleIconFile</key>
+  <string>{}</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+"#,
+            display_name, bundle_id, icon_version, icon_version, icon_name
+        );
+        if fs::write(&plist_path, plist).is_err() {
+            return None;
+        }
+    }
+
+    let exec_path = macos.join("wakedev-helper");
+    if !exec_path.exists() {
+        let script = b"#!/bin/sh\nexit 0\n";
+        if fs::write(&exec_path, script).is_err() {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = fs::metadata(&exec_path).map(|m| m.permissions()) {
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&exec_path, perms);
+            }
+        }
+    }
+
+    let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let _ = Command::new(lsregister).arg("-f").arg(&app_dir).status();
+
+    Some(bundle_id.to_string())
+}
+
+fn allow_image_icons() -> bool {
+    std::env::var("WAKEDEV_ALLOW_IMAGE_ICONS").map(|v| v == "1").unwrap_or(false)
+}
+
+fn write_if_changed(path: &PathBuf, contents: &[u8]) -> Result<bool, std::io::Error> {
+    if let Ok(existing) = fs::read(path) {
+        if existing == contents {
+            return Ok(false);
+        }
+    }
+    fs::write(path, contents)?;
+    Ok(true)
 }
 
 fn default_config_path() -> PathBuf {
@@ -821,10 +992,12 @@ fn handle_claude_hook(payload: serde_json::Value) -> Result<(), NotifallError> {
     let (title, message) = truncate_message(title, message);
     let on_click = format!("{} focus", std::env::current_exe()?.display());
     let args = SendArgs {
-        title,
+        title: Some(title),
         message,
         icon: None,
+        no_icon: false,
         link: None,
+        sound: None,
         urgency: None,
         tag: None,
         source: Some("claude".to_string()),
@@ -872,10 +1045,12 @@ fn handle_codex_hook(payload: serde_json::Value) -> Result<(), NotifallError> {
     let (title, message) = truncate_message(title, message);
     let on_click = format!("{} focus", std::env::current_exe()?.display());
     let args = SendArgs {
-        title,
+        title: Some(title),
         message,
         icon: None,
+        no_icon: false,
         link: None,
+        sound: None,
         urgency: None,
         tag: None,
         source: Some("codex".to_string()),
