@@ -44,6 +44,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: RemoteCmd,
     },
+    /// Telegram provider utilities
+    Telegram {
+        #[command(subcommand)]
+        command: TelegramCmd,
+    },
     /// Internal macOS click-wait helper
     #[command(hide = true)]
     WaitMacos(WaitMacosArgs),
@@ -294,6 +299,23 @@ pub enum RemoteCmd {
     Ping(RemotePingArgs),
     /// Toggle remote forwarding for all notifications
     Forward(RemoteForwardArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TelegramCmd {
+    /// Fetch recent chat IDs for the bot
+    ChatId(TelegramChatIdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TelegramChatIdArgs {
+    /// Telegram bot token
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Apply and set telegram.chat_id in config
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(Debug, Args)]

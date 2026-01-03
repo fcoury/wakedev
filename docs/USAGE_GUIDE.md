@@ -457,6 +457,18 @@ ding config set telegram.parse_mode "MarkdownV2"
 ding config set telegram.silent false
 ```
 
+### Fetch chat IDs
+
+```bash
+ding telegram chat-id --token "123456:ABC..."
+```
+
+Set the first ID into config:
+
+```bash
+ding telegram chat-id --token "123456:ABC..." --apply
+```
+
 ### Send a Telegram notification
 
 ```bash

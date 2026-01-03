@@ -10,7 +10,7 @@ mod remote;
 use crate::cli::{
     Cli, Commands, ConfigCmd, ConfigSetArgs, FocusArgs, ForwardState, HookArgs, InstallArgs,
     ListenArgs, ProvidersCmd, RemoteCmd, RemoteForwardArgs, RemotePingArgs, SendArgs, SourcesCmd,
-    UrgencyArg,
+    TelegramChatIdArgs, TelegramCmd, UrgencyArg,
 };
 use crate::config::{Config, MacosConfig, SourceConfig, TelegramConfig};
 use crate::context::{detect_context, Context};
@@ -68,6 +68,7 @@ fn run() -> Result<(), NotifallError> {
         Commands::WaitMacos(args) => handle_wait_macos(args),
         Commands::Listen(args) => handle_listen(config_path.as_ref(), args),
         Commands::Remote { command } => handle_remote(command, config_path.as_ref()),
+        Commands::Telegram { command } => handle_telegram(command, config_path.as_ref()),
     }
 }
 
@@ -456,6 +457,114 @@ fn handle_remote(command: RemoteCmd, config_path: Option<&PathBuf>) -> Result<()
         RemoteCmd::Ping(args) => handle_remote_ping(args, config_path),
         RemoteCmd::Forward(args) => handle_remote_forward(args, config_path),
     }
+}
+
+fn handle_telegram(
+    command: TelegramCmd,
+    config_path: Option<&PathBuf>,
+) -> Result<(), NotifallError> {
+    match command {
+        TelegramCmd::ChatId(args) => handle_telegram_chat_id(args, config_path),
+    }
+}
+
+fn handle_telegram_chat_id(
+    args: TelegramChatIdArgs,
+    config_path: Option<&PathBuf>,
+) -> Result<(), NotifallError> {
+    let path = config_path
+        .cloned()
+        .unwrap_or_else(default_config_path);
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let doc = toml_edit::DocumentMut::from_str(&existing)?;
+    let token = args
+        .token
+        .or_else(|| {
+            doc.get("telegram")
+                .and_then(|v| v.get("bot_token"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| {
+            NotifallError::Provider(ProviderError::Message(
+                "telegram bot_token is not configured".to_string(),
+            ))
+        })?;
+
+    let updates_url = format!("https://api.telegram.org/bot{token}/getUpdates");
+    let response = ureq::get(&updates_url).call();
+    let value = match response {
+        Ok(res) => res
+            .into_json::<serde_json::Value>()
+            .map_err(|err| NotifallError::Provider(ProviderError::Message(err.to_string())))?,
+        Err(ureq::Error::Status(code, res)) => {
+            let desc = res
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("telegram error status {code}"));
+            return Err(NotifallError::Provider(ProviderError::Message(desc)));
+        }
+        Err(err) => {
+            return Err(NotifallError::Provider(ProviderError::Message(
+                err.to_string(),
+            )))
+        }
+    };
+
+    let result = value
+        .get("result")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            NotifallError::Provider(ProviderError::Message(
+                "telegram getUpdates returned no results".to_string(),
+            ))
+        })?;
+
+    let mut chat_ids = Vec::new();
+    for item in result {
+        if let Some(chat_id) = item
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+        {
+            if let Some(id) = chat_id.as_i64() {
+                chat_ids.push(id.to_string());
+            } else if let Some(id) = chat_id.as_str() {
+                chat_ids.push(id.to_string());
+            }
+        }
+    }
+
+    chat_ids.sort();
+    chat_ids.dedup();
+
+    if chat_ids.is_empty() {
+        return Err(NotifallError::Provider(ProviderError::Message(
+            "no chat_id found in getUpdates (send a message to the bot first)".to_string(),
+        )));
+    }
+
+    for id in &chat_ids {
+        println!("{id}");
+    }
+
+    if args.apply {
+        let mut doc = toml_edit::DocumentMut::from_str(&existing)?;
+        set_toml_key(
+            &mut doc,
+            "telegram.chat_id",
+            toml_edit::Value::from(chat_ids[0].as_str()),
+        )?;
+        let new_contents = doc.to_string();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, new_contents)?;
+        println!("set telegram.chat_id in {}", path.display());
+    }
+
+    Ok(())
 }
 
 fn handle_remote_ping(

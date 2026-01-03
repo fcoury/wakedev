@@ -97,6 +97,7 @@ icon = "~/.config/ding/icons/openai.icns"
 | `listen` | Start HTTP listener for remote notifications |
 | `remote ping` | Test connection to remote listener |
 | `remote forward {on\|off\|toggle\|status}` | Manage remote forwarding |
+| `telegram chat-id` | Fetch Telegram chat IDs |
 | `install {claude\|codex}` | Show integration setup |
 | `hook {claude\|codex}` | Process hook events |
 | `focus` | Restore terminal focus |
@@ -292,3 +293,22 @@ ding send "Review when ready" --background --on-click "open https://github.com/p
 ## License
 
 MIT
+## Telegram Usage
+
+### Fetch chat IDs
+
+```bash
+ding telegram chat-id --token "123456:ABC..."
+```
+
+Set the first ID into config:
+
+```bash
+ding telegram chat-id --token "123456:ABC..." --apply
+```
+
+### Send a Telegram notification
+
+```bash
+ding send "Hello from ding" --provider telegram
+```
