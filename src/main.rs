@@ -37,6 +37,32 @@ fn main() {
     }
 }
 
+fn debug_enabled() -> bool {
+    std::env::var("DING_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn debug_log(message: &str) {
+    if !debug_enabled() {
+        return;
+    }
+    if let Ok(path) = std::env::var("DING_DEBUG_FILE") {
+        if !path.trim().is_empty() {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[ding debug] {message}");
+                return;
+            }
+        }
+    }
+    eprintln!("[ding debug] {message}");
+}
+
 fn run() -> Result<(), NotifallError> {
     let cli = Cli::parse();
 
@@ -74,9 +100,17 @@ fn run() -> Result<(), NotifallError> {
 }
 
 fn handle_send(config_path: Option<&PathBuf>, args: SendArgs) -> Result<(), NotifallError> {
-    let config = load_config(config_path)?;
+    let resolved_path = config_path
+        .cloned()
+        .unwrap_or_else(default_config_path);
+    debug_log(&format!("config_path={}", resolved_path.display()));
+    let config = load_config(Some(&resolved_path))?;
     let provider_name = resolve_provider(args.provider.as_deref(), config.as_ref())?;
+    debug_log(&format!("provider={}", provider_name));
     let source = args.source.as_ref().map(|s| s.to_lowercase());
+    if let Some(source) = source.as_deref() {
+        debug_log(&format!("source={source}"));
+    }
     let source_config = resolve_source_config(config.as_ref(), source.as_deref());
     let context = detect_context();
 
@@ -141,6 +175,18 @@ fn handle_send(config_path: Option<&PathBuf>, args: SendArgs) -> Result<(), Noti
         }
         "telegram" => {
             let telegram_config = resolve_telegram_config(config.as_ref(), &args)?;
+            debug_log(&format!(
+                "telegram chat_id={} parse_mode={} silent={}",
+                telegram_config
+                    .chat_id
+                    .as_deref()
+                    .unwrap_or("(unset)"),
+                telegram_config
+                    .parse_mode
+                    .as_deref()
+                    .unwrap_or("(unset)"),
+                telegram_config.silent.unwrap_or(false)
+            ));
             let provider = TelegramProvider::new(telegram_config)?;
             let report = provider.send(&notification, SendOptions { wait_for_click: false })?;
             if args.json {
@@ -370,6 +416,15 @@ fn handle_listen(
 
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("");
+        if debug_enabled() {
+            let remote = request
+                .remote_addr()
+                .map(|addr| addr.ip().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            debug_log(&format!(
+                "listener request path={path} remote={remote}"
+            ));
+        }
         if path == "/ping" {
             let response = json_response(200, r#"{"status":"ok"}"#);
             let _ = request.respond(response);
@@ -425,6 +480,13 @@ fn handle_listen(
         };
 
         let mut notification = envelope.notification;
+        if debug_enabled() {
+            let source = notification.source.as_deref().unwrap_or("(none)");
+            debug_log(&format!(
+                "listener notify title=\"{}\" source={source}",
+                notification.title
+            ));
+        }
         notification.icon = None;
         if notification.title.trim().is_empty() {
             notification.title = "Notification".to_string();
@@ -1062,6 +1124,7 @@ fn send_remote_request(
     retries: u32,
     envelope: &RemoteEnvelope,
 ) -> Result<(), NotifallError> {
+    debug_log(&format!("remote_url={url} timeout_ms={timeout_ms} retries={retries}"));
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(timeout_ms))
         .timeout_read(Duration::from_millis(timeout_ms))
