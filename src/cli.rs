@@ -142,6 +142,10 @@ pub enum ConfigCmd {
     Init(ConfigInitArgs),
     /// Set a config key (supports dotted paths)
     Set(ConfigSetArgs),
+    /// Show the resolved config path
+    Path,
+    /// Show current config contents
+    List,
 }
 
 #[derive(Debug, Args)]

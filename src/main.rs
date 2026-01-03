@@ -47,6 +47,12 @@ fn run() -> Result<(), NotifallError> {
         Commands::Config { command: ConfigCmd::Set(args) } => {
             handle_config_set(config_path.as_ref(), args)
         }
+        Commands::Config { command: ConfigCmd::Path } => {
+            handle_config_path(config_path.as_ref())
+        }
+        Commands::Config { command: ConfigCmd::List } => {
+            handle_config_list(config_path.as_ref())
+        }
         Commands::Providers {
             command: ProvidersCmd::List,
         } => handle_providers_list(),
@@ -583,6 +589,27 @@ fn handle_config_set(
     }
     fs::write(&path, new_contents)?;
     println!("set {} in {}", args.key, path.display());
+    Ok(())
+}
+
+fn handle_config_path(config_path: Option<&PathBuf>) -> Result<(), NotifallError> {
+    let path = config_path
+        .cloned()
+        .unwrap_or_else(default_config_path);
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn handle_config_list(config_path: Option<&PathBuf>) -> Result<(), NotifallError> {
+    let path = config_path
+        .cloned()
+        .unwrap_or_else(default_config_path);
+    if !path.exists() {
+        println!("(no config file at {})", path.display());
+        return Ok(());
+    }
+    let contents = fs::read_to_string(&path)?;
+    print!("{contents}");
     Ok(())
 }
 
