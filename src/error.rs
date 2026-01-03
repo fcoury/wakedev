@@ -24,7 +24,7 @@ pub enum NotifallError {
     #[error("--background requires --on-click")]
     BackgroundRequiresOnClick,
     #[error("{0}")]
-    RemoteForwardMissingUrl(String),
+    RemoteForwardMissingHost(String),
     #[error("HOME is not set")]
     MissingHome,
 }

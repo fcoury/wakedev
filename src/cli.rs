@@ -111,9 +111,13 @@ pub struct SendArgs {
     #[arg(long)]
     pub provider: Option<String>,
 
-    /// Remote listener URL (remote provider only)
+    /// Remote listener host (remote provider only)
     #[arg(long)]
-    pub remote_url: Option<String>,
+    pub remote_host: Option<String>,
+
+    /// Remote listener port (remote provider only)
+    #[arg(long)]
+    pub remote_port: Option<u16>,
 
     /// Remote listener auth token (remote provider only)
     #[arg(long)]
@@ -153,7 +157,7 @@ pub struct ConfigInitArgs {
 
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
-    /// Config key to set (e.g. remote.url)
+    /// Config key to set (e.g. remote.host)
     pub key: String,
 
     /// Value to set
@@ -274,9 +278,13 @@ pub enum RemoteCmd {
 
 #[derive(Debug, Args)]
 pub struct RemotePingArgs {
-    /// Remote listener URL
+    /// Remote listener host
     #[arg(long)]
-    pub remote_url: Option<String>,
+    pub remote_host: Option<String>,
+
+    /// Remote listener port
+    #[arg(long)]
+    pub remote_port: Option<u16>,
 
     /// Remote listener auth token
     #[arg(long)]
@@ -289,9 +297,13 @@ pub struct RemoteForwardArgs {
     #[arg(value_enum)]
     pub state: ForwardState,
 
-    /// Remote listener URL (sets remote.url when enabling)
+    /// Remote listener host (sets remote.host when enabling)
     #[arg(long)]
-    pub url: Option<String>,
+    pub host: Option<String>,
+
+    /// Remote listener port (sets remote.port when enabling)
+    #[arg(long)]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

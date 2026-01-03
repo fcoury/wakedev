@@ -27,6 +27,8 @@ pub struct SourceConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RemoteConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
     pub url: Option<String>,
     pub token: Option<String>,
     pub timeout_ms: Option<u64>,
@@ -58,7 +60,8 @@ impl Config {
 # icon = "/path/to/icon.png"
 
 [remote]
-# url = "http://127.0.0.1:4280/notify"
+# host = "127.0.0.1"
+# port = 4280
 # token = "..."
 # timeout_ms = 2000
 # retries = 2

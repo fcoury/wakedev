@@ -446,12 +446,20 @@ fn handle_remote_ping(
 ) -> Result<(), NotifallError> {
     let config = load_config(config_path)?;
     let remote_cfg = config.and_then(|c| c.remote).unwrap_or_default();
-    let url = args
-        .remote_url
-        .or(remote_cfg.url)
-        .unwrap_or_else(default_remote_url);
+    let target = resolve_remote_target(
+        args.remote_host.as_deref(),
+        args.remote_port,
+        remote_cfg.host.as_deref(),
+        remote_cfg.port,
+        remote_cfg.url.as_deref(),
+    )
+    .ok_or_else(|| {
+        NotifallError::Provider(ProviderError::Message(
+            "remote host is not configured".to_string(),
+        ))
+    })?;
     let token = args.remote_token.or(remote_cfg.token);
-    let ping_url = to_ping_url(&url);
+    let ping_url = to_ping_url(&target.0);
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(2000))
@@ -495,18 +503,27 @@ fn handle_remote_forward(
     };
 
     if desired {
-        if let Some(url) = args.url.as_deref() {
-            set_remote_field(&mut doc, "url", toml_edit::Value::from(url));
-        } else if remote_url_from_doc(&doc).is_none() {
+        if let Some(host) = args.host.as_deref() {
+            set_remote_field(&mut doc, "host", toml_edit::Value::from(host));
+        }
+        if let Some(port) = args.port {
+            set_remote_field(&mut doc, "port", toml_edit::Value::from(port as i64));
+        }
+
+        if remote_host_from_doc(&doc).is_none() {
             let path_display = path.display();
             let message = format!(
-                "Remote forwarding needs a remote URL.\n\n\
-Set it with:\n  wakedev remote forward on --url http://127.0.0.1:4280/notify\n\
-or:\n  wakedev config set remote.url http://127.0.0.1:4280/notify\n\n\
+                "Remote forwarding needs a remote host.\n\n\
+Set it with:\n  wakedev remote forward on --host mba --port 4280\n\
+or:\n  wakedev config set remote.host mba\n  wakedev config set remote.port 4280\n\n\
 Config file: {path_display}\n\
 If missing, run: wakedev config init"
             );
-            return Err(NotifallError::RemoteForwardMissingUrl(message));
+            return Err(NotifallError::RemoteForwardMissingHost(message));
+        }
+
+        if remote_port_from_doc(&doc).is_none() {
+            set_remote_field(&mut doc, "port", toml_edit::Value::from(4280i64));
         }
         let current_default = doc
             .get("default_provider")
@@ -574,6 +591,22 @@ fn remote_url_from_doc(doc: &toml_edit::DocumentMut) -> Option<String> {
         .and_then(|v| v.get("url"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+fn remote_host_from_doc(doc: &toml_edit::DocumentMut) -> Option<String> {
+    doc.get("remote")
+        .and_then(|v| v.get("host"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| remote_url_from_doc(doc).and_then(|url| parse_remote_url(&url).map(|t| t.0)))
+}
+
+fn remote_port_from_doc(doc: &toml_edit::DocumentMut) -> Option<u16> {
+    doc.get("remote")
+        .and_then(|v| v.get("port"))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u16::try_from(v).ok())
+        .or_else(|| remote_url_from_doc(doc).and_then(|url| parse_remote_url(&url).map(|t| t.1)))
 }
 
 fn forward_enabled(doc: &toml_edit::DocumentMut) -> bool {
@@ -650,11 +683,13 @@ fn handle_remote_send(
     source: Option<&str>,
 ) -> Result<(), NotifallError> {
     let remote_cfg = config.and_then(|c| c.remote.clone()).unwrap_or_default();
-    let url = args
-        .remote_url
-        .clone()
-        .or(remote_cfg.url)
-        .unwrap_or_else(default_remote_url);
+    let target = resolve_remote_target(
+        args.remote_host.as_deref(),
+        args.remote_port,
+        remote_cfg.host.as_deref(),
+        remote_cfg.port,
+        remote_cfg.url.as_deref(),
+    );
     let token = args.remote_token.clone().or(remote_cfg.token);
     let timeout_ms = args.remote_timeout_ms.or(remote_cfg.timeout_ms).unwrap_or(2000);
     let retries = args.remote_retries.or(remote_cfg.retries).unwrap_or(2);
@@ -665,7 +700,14 @@ fn handle_remote_send(
         context: Some(RemoteContext::from_local(context.clone())),
     };
 
-    let send_result = send_remote_request(&url, token.as_deref(), timeout_ms, retries, &envelope);
+    let send_result = match target {
+        Some((url, _host, _port)) => {
+            send_remote_request(&url, token.as_deref(), timeout_ms, retries, &envelope)
+        }
+        None => Err(NotifallError::Provider(ProviderError::Message(
+            "remote host is not configured".to_string(),
+        ))),
+    };
     if send_result.is_ok() {
         if args.json {
             print_send_output("remote", None, false, None)?;
@@ -729,10 +771,6 @@ fn send_remote_request(
     )))
 }
 
-fn default_remote_url() -> String {
-    "http://127.0.0.1:4280/notify".to_string()
-}
-
 fn to_ping_url(url: &str) -> String {
     if url.ends_with("/notify") {
         return url.trim_end_matches("/notify").to_string() + "/ping";
@@ -741,6 +779,50 @@ fn to_ping_url(url: &str) -> String {
         return format!("{url}ping");
     }
     format!("{url}/ping")
+}
+
+fn resolve_remote_target(
+    cli_host: Option<&str>,
+    cli_port: Option<u16>,
+    cfg_host: Option<&str>,
+    cfg_port: Option<u16>,
+    cfg_url: Option<&str>,
+) -> Option<(String, String, u16)> {
+    if let Some(host) = cli_host {
+        let port = cli_port.or(cfg_port).unwrap_or(4280);
+        let url = format!("http://{host}:{port}/notify");
+        return Some((url, host.to_string(), port));
+    }
+
+    if let Some(host) = cfg_host {
+        let port = cli_port.or(cfg_port).unwrap_or(4280);
+        let url = format!("http://{host}:{port}/notify");
+        return Some((url, host.to_string(), port));
+    }
+
+    if let Some(url) = cfg_url {
+        if let Some((host, port)) = parse_remote_url(url) {
+            let port = cli_port.unwrap_or(port);
+            let url = format!("http://{host}:{port}/notify");
+            return Some((url, host, port));
+        }
+    }
+
+    None
+}
+
+fn parse_remote_url(url: &str) -> Option<(String, u16)> {
+    let trimmed = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let host_port = trimmed.split('/').next().unwrap_or(trimmed);
+    if let Some((host, port)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port.parse::<u16>() {
+            return Some((host.to_string(), port));
+        }
+    }
+    None
 }
 
 fn default_focus_command() -> Option<String> {
@@ -1548,7 +1630,8 @@ fn handle_claude_hook(payload: serde_json::Value) -> Result<(), NotifallError> {
         background: true,
         json: false,
         provider: None,
-        remote_url: None,
+        remote_host: None,
+        remote_port: None,
         remote_token: None,
         remote_timeout_ms: None,
         remote_retries: None,
@@ -1607,7 +1690,8 @@ fn handle_codex_hook(payload: serde_json::Value) -> Result<(), NotifallError> {
         background: true,
         json: false,
         provider: None,
-        remote_url: None,
+        remote_host: None,
+        remote_port: None,
         remote_token: None,
         remote_timeout_ms: None,
         remote_retries: None,

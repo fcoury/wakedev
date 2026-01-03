@@ -25,8 +25,8 @@
   - Options: `--bind`, `--port`, `--token`, `--allow-host`, `--foreground/--daemon`, `--pidfile`.
   - Defaults: bind `0.0.0.0`, port `4280`.
 - `wakedev send --provider remote`
-  - Sends to listener (`remote.url` or `--remote-url`).
-  - Options: `--remote-url`, `--remote-token`, `--remote-timeout`, `--remote-retries`.
+  - Sends to listener (`remote.host`/`remote.port` or `--remote-host`/`--remote-port`).
+  - Options: `--remote-host`, `--remote-port`, `--remote-token`, `--remote-timeout`, `--remote-retries`.
 - `wakedev remote ping`
   - Health check endpoint to confirm listener connectivity.
 
@@ -34,7 +34,8 @@
 
 ```toml
 [remote]
-url = "http://127.0.0.1:4280/notify"
+host = "127.0.0.1"
+port = 4280
 token = "..."
 timeout_ms = 2000
 retries = 2
@@ -100,4 +101,4 @@ prefix_hostname = true
   - `wakedev listen --bind 0.0.0.0 --port 4280`
 - Remote machine:
   - `ssh -L 4280:127.0.0.1:4280 user@remote-host`
-  - `wakedev send --provider remote --remote-url http://127.0.0.1:4280/notify "done"`
+  - `wakedev send --provider remote --remote-host 127.0.0.1 --remote-port 4280 "done"`
