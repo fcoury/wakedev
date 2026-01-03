@@ -257,6 +257,8 @@ pub struct ListenArgs {
 pub enum RemoteCmd {
     /// Ping the configured remote listener
     Ping(RemotePingArgs),
+    /// Toggle remote forwarding for all notifications
+    Forward(RemoteForwardArgs),
 }
 
 #[derive(Debug, Args)]
@@ -268,6 +270,25 @@ pub struct RemotePingArgs {
     /// Remote listener auth token
     #[arg(long)]
     pub remote_token: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteForwardArgs {
+    /// Desired forward state
+    #[arg(value_enum)]
+    pub state: ForwardState,
+
+    /// Apply changes (default is dry-run)
+    #[arg(long)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ForwardState {
+    On,
+    Off,
+    Toggle,
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

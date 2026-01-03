@@ -32,6 +32,8 @@ pub struct RemoteConfig {
     pub timeout_ms: Option<u64>,
     pub retries: Option<u32>,
     pub fallback_to_local: Option<bool>,
+    pub forward_enabled: Option<bool>,
+    pub previous_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -61,6 +63,8 @@ impl Config {
 # timeout_ms = 2000
 # retries = 2
 # fallback_to_local = true
+# forward_enabled = true
+# previous_provider = "macos"
 
 [listener]
 # bind = "127.0.0.1"

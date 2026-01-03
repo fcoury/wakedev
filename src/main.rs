@@ -8,8 +8,8 @@ mod provider;
 mod remote;
 
 use crate::cli::{
-    Cli, Commands, ConfigCmd, FocusArgs, HookArgs, InstallArgs, ListenArgs, ProvidersCmd,
-    RemoteCmd, RemotePingArgs, SendArgs, SourcesCmd, UrgencyArg,
+    Cli, Commands, ConfigCmd, FocusArgs, ForwardState, HookArgs, InstallArgs, ListenArgs,
+    ProvidersCmd, RemoteCmd, RemoteForwardArgs, RemotePingArgs, SendArgs, SourcesCmd, UrgencyArg,
 };
 use crate::config::{Config, MacosConfig, SourceConfig};
 use crate::context::{detect_context, Context};
@@ -425,6 +425,7 @@ fn handle_listen(
 fn handle_remote(command: RemoteCmd, config_path: Option<&PathBuf>) -> Result<(), NotifallError> {
     match command {
         RemoteCmd::Ping(args) => handle_remote_ping(args, config_path),
+        RemoteCmd::Forward(args) => handle_remote_forward(args, config_path),
     }
 }
 
@@ -457,6 +458,105 @@ fn handle_remote_ping(
         Err(err) => Err(NotifallError::Provider(
             ProviderError::Message(format!("remote ping failed: {err}")),
         )),
+    }
+}
+
+fn handle_remote_forward(
+    args: RemoteForwardArgs,
+    config_path: Option<&PathBuf>,
+) -> Result<(), NotifallError> {
+    let path = config_path
+        .cloned()
+        .unwrap_or_else(default_config_path);
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let mut doc = toml_edit::DocumentMut::from_str(&existing)?;
+
+    let enabled = forward_enabled(&doc);
+    let desired = match args.state {
+        ForwardState::Status => {
+            let state = if enabled { "on" } else { "off" };
+            println!("{state}");
+            return Ok(());
+        }
+        ForwardState::Toggle => !enabled,
+        ForwardState::On => true,
+        ForwardState::Off => false,
+    };
+
+    if desired {
+        let current_default = doc
+            .get("default_provider")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(current) = current_default.as_deref() {
+            if current != "remote" {
+                set_remote_field(&mut doc, "previous_provider", toml_edit::Value::from(current));
+            }
+        }
+        doc["default_provider"] = toml_edit::value("remote");
+        set_remote_field(&mut doc, "forward_enabled", toml_edit::Value::from(true));
+    } else {
+        set_remote_field(&mut doc, "forward_enabled", toml_edit::Value::from(false));
+        let previous = doc
+            .get("remote")
+            .and_then(|v| v.get("previous_provider"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(prev) = previous.as_deref() {
+            if prev != "remote" {
+                doc["default_provider"] = toml_edit::value(prev);
+            }
+        } else if cfg!(target_os = "macos") {
+            doc["default_provider"] = toml_edit::value("macos");
+        } else {
+            doc.remove("default_provider");
+        }
+    }
+
+    let new_contents = doc.to_string();
+    if !args.apply {
+        let apply_cmd = format!(
+            "wakedev remote forward {} --apply",
+            match args.state {
+                ForwardState::On => "on",
+                ForwardState::Off => "off",
+                ForwardState::Toggle => "toggle",
+                ForwardState::Status => "status",
+            }
+        );
+        print_diff(&path, &existing, &new_contents, &apply_cmd)?;
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, new_contents)?;
+    println!(
+        "remote forwarding {}",
+        if desired { "enabled" } else { "disabled" }
+    );
+    Ok(())
+}
+
+fn forward_enabled(doc: &toml_edit::DocumentMut) -> bool {
+    if let Some(enabled) = doc
+        .get("remote")
+        .and_then(|v| v.get("forward_enabled"))
+        .and_then(|v| v.as_bool())
+    {
+        return enabled;
+    }
+    matches!(
+        doc.get("default_provider").and_then(|v| v.as_str()),
+        Some("remote")
+    )
+}
+
+fn set_remote_field(doc: &mut toml_edit::DocumentMut, key: &str, value: toml_edit::Value) {
+    let table = doc.entry("remote").or_insert(toml_edit::table());
+    if let Some(table) = table.as_table_mut() {
+        table[key] = toml_edit::Item::Value(value);
     }
 }
 
@@ -830,6 +930,14 @@ fn resolve_provider(
 ) -> Result<String, NotifallError> {
     if let Some(provider) = cli_provider {
         return Ok(provider.to_lowercase());
+    }
+    if let Some(remote_enabled) = config
+        .and_then(|c| c.remote.as_ref())
+        .and_then(|r| r.forward_enabled)
+    {
+        if remote_enabled {
+            return Ok("remote".to_string());
+        }
     }
     if let Some(default_provider) = config.and_then(|c| c.default_provider.as_ref()) {
         return Ok(default_provider.to_lowercase());
